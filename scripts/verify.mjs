@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 // This opt-in acceptance test produces sound and uses the current account.
-const client = new Client({ name: 'netease-direct-acceptance', version: '0.4.0' });
+const client = new Client({ name: 'netease-direct-acceptance', version: '0.5.0' });
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [fileURLToPath(new URL('../src/server.mjs', import.meta.url))],
@@ -51,7 +51,7 @@ try {
   await client.connect(transport);
   connected = true;
   report.toolNames = (await client.listTools()).tools.map((t) => t.name);
-  assert.equal(report.toolNames.length, 24);
+  assert.equal(report.toolNames.length, 25);
   const account = await call('netease_account_status');
   assert.equal(account.loggedIn, true);
   report.account = { loggedIn: account.loggedIn, isVip: account.isVip, vipType: account.vipType };
@@ -161,8 +161,31 @@ try {
     changed: favorite.changed,
     actualMutationTested: false,
   };
+  const modeList = await mutate('netease_play_liked', { mode: 'shuffle' });
+  const shuffled = await mutate('netease_play_mode', { mode: 'shuffle' });
+  assert.equal(shuffled.queue.playbackMode, 'shuffle');
+  assert.equal(shuffled.songId, modeList.songId);
+  const followingId = shuffled.queue.items[1];
+  const shuffledNext = await mutate('netease_next');
+  assert.equal(shuffledNext.songId, followingId);
+  assert.equal((await mutate('netease_previous')).songId, modeList.songId);
+  const repeated = await mutate('netease_play_mode', { mode: 'repeat_one' });
+  await mutate('netease_seek', { seconds: repeated.duration - 0.7 });
+  const looped = await waitFor(
+    (s) => s.playing && s.generation > repeated.generation && s.songId === repeated.songId
+  );
+  assert.ok(looped.position < 10);
+  const pausedLoop = await mutate('netease_pause');
+  const sequence = await mutate('netease_play_mode', { mode: 'sequence' });
+  assert.equal(sequence.paused, true);
+  assert.ok(Math.abs(sequence.position - pausedLoop.position) < 0.15);
+  report.playbackModes = {
+    shuffleNavigation: true,
+    repeatOneEofAfterSeek: true,
+    pausedModeSwitch: true,
+  };
   await mutate('netease_stop');
-  assert.equal(new Set(report.calls.map((c) => c.name)).size, 24);
+  assert.equal(new Set(report.calls.map((c) => c.name)).size, 25);
   report.passed = true;
 } catch (error) {
   report.passed = false;

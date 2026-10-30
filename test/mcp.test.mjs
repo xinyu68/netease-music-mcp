@@ -24,6 +24,14 @@ async function rig() {
         calls.push(args);
         return { verified: true, songId: args[0] };
       },
+      playCollection: async (_loader, requestId, _signature, options) => {
+        calls.push(['collection', requestId, options]);
+        return { queue: { playbackMode: options.mode } };
+      },
+      setPlaybackMode: async (...args) => {
+        calls.push(['mode', ...args]);
+        return { queue: { playbackMode: args[0] } };
+      },
       status: async () => ({ phase: 'playing', songId: '1' }),
       stop: async () => ({ phase: 'stopped' }),
     },
@@ -47,7 +55,7 @@ test('MCP lists the supported music tools without exposing raw URLs or unrelated
   const r = await rig();
   try {
     const tools = (await r.client.listTools()).tools;
-    assert.equal(tools.length, 24);
+    assert.equal(tools.length, 25);
     assert.equal(tools.find((t) => t.name === 'netease_like').annotations.readOnlyHint, false);
     assert.ok(tools.some((t) => t.name === 'netease_play_liked'));
     assert.ok(!tools.some((t) => /download|cookie|create_playlist|delete/.test(t.name)));
@@ -108,6 +116,55 @@ test('MCP never forwards untrusted dependency errors, cookies or URLs to tool re
     assert.ok(!text.includes('must-not-leak'));
     assert.ok(!text.includes('cdn.test'));
     assert.ok(text.includes('INTERNAL_ERROR'));
+  } finally {
+    await r.close();
+  }
+});
+
+test('MCP exposes explicit playback modes, rejects unknown values and forwards single-call playback choices', async () => {
+  const r = await rig();
+  try {
+    for (const mode of [undefined, 'loop_all', true]) {
+      const invalid = await r.client.callTool({
+        name: 'netease_play_mode',
+        arguments: { requestId: 'bad', mode },
+      });
+      assert.equal(invalid.isError, true);
+    }
+    assert.equal(r.calls.length, 0);
+    for (const mode of ['shuffle', 'repeat_one', 'sequence']) {
+      const result = await r.client.callTool({
+        name: 'netease_play_mode',
+        arguments: { requestId: mode, mode },
+      });
+      assert.notEqual(result.isError, true);
+      assert.equal(JSON.parse(result.content[0].text).queue.playbackMode, mode);
+    }
+    const play = await r.client.callTool({
+      name: 'netease_play',
+      arguments: { songId: '1', requestId: 'play', mode: 'repeat_one' },
+    });
+    assert.notEqual(play.isError, true);
+    assert.equal(r.calls.at(-1)[2].mode, 'repeat_one');
+    for (const name of [
+      'netease_play_liked',
+      'netease_play_playlist',
+      'netease_play_daily',
+      'netease_play_heart_mode',
+      'netease_play_hot_chart',
+    ]) {
+      const result = await r.client.callTool({
+        name,
+        arguments: { requestId: name, playlistId: '1', mode: 'shuffle' },
+      });
+      assert.notEqual(result.isError, true);
+      assert.deepEqual(r.calls.at(-1), ['collection', name, { mode: 'shuffle' }]);
+    }
+    const invalidPlay = await r.client.callTool({
+      name: 'netease_play_liked',
+      arguments: { requestId: 'bad-play', mode: 'random' },
+    });
+    assert.equal(invalidPlay.isError, true);
   } finally {
     await r.close();
   }

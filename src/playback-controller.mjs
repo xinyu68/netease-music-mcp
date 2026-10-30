@@ -1,15 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { MusicError, safeError } from './errors.mjs';
 import { abortable, Mutations } from './async.mjs';
 
 const validId = (id) => /^[1-9]\d{0,15}$/.test(String(id));
+const validMode = (mode) => ['sequence', 'shuffle', 'repeat_one'].includes(mode);
 export class PlaybackController {
-  constructor({ engine, resolver, catalog, config }) {
+  constructor({ engine, resolver, catalog, config, randomIndex = randomInt }) {
     this.engine = engine;
     this.resolver = resolver;
     this.catalog = catalog;
     this.config = config;
+    this.randomIndex = randomIndex;
     this.mutations = new Mutations();
     this.epoch = 0;
     this.generation = 0;
@@ -20,6 +22,9 @@ export class PlaybackController {
     this.index = -1;
     this.queueName = '';
     this.queueMode = 'sequence';
+    this.playbackMode = 'sequence';
+    this.shuffleOrder = [];
+    this.shufflePosition = -1;
     this.refill = null;
     this.needsRefill = false;
     this.recovery = 0;
@@ -51,9 +56,15 @@ export class PlaybackController {
     return {
       name: this.queueName,
       mode: this.queueMode,
+      playbackMode: this.playbackMode,
       length: this.ids.length,
-      index: this.index,
-      items: this.ids.slice(Math.max(0, this.index), Math.max(0, this.index) + 5),
+      index: this.playbackMode === 'shuffle' ? this.shufflePosition : this.index,
+      items:
+        this.playbackMode === 'shuffle'
+          ? this.shuffleOrder
+              .slice(Math.max(0, this.shufflePosition), Math.max(0, this.shufflePosition) + 5)
+              .map((index) => this.ids[index])
+          : this.ids.slice(Math.max(0, this.index), Math.max(0, this.index) + 5),
     };
   }
   async status() {
@@ -160,13 +171,17 @@ export class PlaybackController {
       if (this.active === active) this.active = null;
     }
   }
-  play(id, requestId, { level = this.config.playback.level } = {}) {
-    if (!validId(id) || !['standard', 'exhigh'].includes(level))
+  play(id, requestId, { level = this.config.playback.level, mode } = {}) {
+    if (
+      !validId(id) ||
+      !['standard', 'exhigh'].includes(level) ||
+      (mode !== undefined && !validMode(mode))
+    )
       return Promise.reject(new MusicError('INVALID_ARGUMENT'));
     const epoch = this.epoch;
     return this.mutations.submit(
       requestId,
-      JSON.stringify(['play', String(id), level]),
+      JSON.stringify(['play', String(id), level, mode ?? null]),
       async () => {
         this.check(epoch);
         this.ids = [String(id)];
@@ -176,13 +191,16 @@ export class PlaybackController {
         this.refill = null;
         this.needsRefill = false;
         this.recovery = 0;
+        this.resetOrder(mode, false);
         return this.startTrack(String(id), 0, epoch, level);
       }
     );
   }
-  playCollection(loader, requestId, signature) {
+  playCollection(loader, requestId, signature, { mode } = {}) {
+    if (mode !== undefined && !validMode(mode))
+      return Promise.reject(new MusicError('INVALID_ARGUMENT'));
     const epoch = this.epoch;
-    return this.mutations.submit(requestId, signature, async () => {
+    return this.mutations.submit(requestId, JSON.stringify([signature, mode ?? null]), async () => {
       this.check(epoch);
       const active = new AbortController();
       this.active = active;
@@ -208,7 +226,8 @@ export class PlaybackController {
         this.queueMode = this.refill ? 'heart' : 'sequence';
         this.index = 0;
         this.recovery = 0;
-        return await this.startTrack(this.ids[0], 0, epoch);
+        this.resetOrder(mode, false);
+        return await this.startTrack(this.ids[this.index], 0, epoch);
       } catch (error) {
         if (epoch === this.epoch) {
           this.state.phase = 'error';
@@ -339,16 +358,11 @@ export class PlaybackController {
     });
   }
   move(delta, requestId) {
+    if (![1, -1].includes(delta)) return Promise.reject(new MusicError('INVALID_ARGUMENT'));
     const epoch = this.epoch;
     return this.mutations.submit(requestId, 'move:' + delta, async () => {
       this.check(epoch);
-      const next = this.index + delta;
-      if (delta === 1 && next === this.ids.length && this.refill) return this.refillAndPlay(epoch);
-      if (![1, -1].includes(delta) || next < 0 || next >= this.ids.length)
-        throw new MusicError('QUEUE_BOUNDARY');
-      this.index = next;
-      this.recovery = 0;
-      return this.startTrack(this.ids[next], 0, epoch);
+      return this.advance(delta, epoch);
     });
   }
   onEnd(event) {
@@ -377,12 +391,12 @@ export class PlaybackController {
           this.state.lastError = safeError(new MusicError('PLAYER_FAILED'));
           return;
         }
-        if (this.state.phase === 'playing' && this.index + 1 < this.ids.length) {
-          this.index++;
+        if (this.state.phase !== 'playing') return;
+        if (this.playbackMode === 'repeat_one') {
           this.recovery = 0;
-          return this.startTrack(this.ids[this.index], 0, epoch);
+          return this.startTrack(this.state.songId, 0, epoch);
         }
-        if (this.state.phase === 'playing' && this.refill) return this.refillAndPlay(epoch);
+        if (this.following(1) >= 0 || this.refill) return this.advance(1, epoch);
         this.state.phase = 'ended';
         this.state.position = this.state.duration;
         this.state.verified = false;
@@ -413,12 +427,23 @@ export class PlaybackController {
         throw new MusicError('INVALID_RESPONSE');
       const ids = [...new Set(collection.ids.map(String))].filter((id) => id !== this.state.songId);
       if (!ids.length) throw new MusicError('NOTHING_TO_PLAY');
+      const previousLength = this.ids.length;
       this.ids.push(...ids);
-      this.index++;
-      if (this.ids.length > 10000) {
-        const trim = this.ids.length - 10000;
+      const trim = Math.max(0, this.ids.length - 10000);
+      if (trim > 0) {
         this.ids.splice(0, trim);
-        this.index -= trim;
+      }
+      if (this.playbackMode === 'shuffle') {
+        const history = this.shuffleOrder
+          .slice(0, this.shufflePosition + 1)
+          .filter((index) => index >= trim)
+          .map((index) => index - trim);
+        const upcoming = this.shuffled(ids.map((_, index) => previousLength + index - trim));
+        this.shuffleOrder = [...history, ...upcoming];
+        this.shufflePosition = history.length;
+        this.index = this.shuffleOrder[this.shufflePosition];
+      } else {
+        this.index = previousLength - trim;
       }
       this.needsRefill = false;
       this.recovery = 0;
@@ -445,5 +470,53 @@ export class PlaybackController {
     this.state.phase = 'stopped';
     this.state.verified = false;
     this.state.position = 0;
+  }
+  shuffled(indices) {
+    for (let i = indices.length - 1; i > 0; i--) {
+      const other = this.randomIndex(i + 1);
+      [indices[i], indices[other]] = [indices[other], indices[i]];
+    }
+    return indices;
+  }
+  resetOrder(mode, keepCurrent = true) {
+    this.playbackMode = mode ?? this.playbackMode;
+    this.shuffleOrder = [];
+    this.shufflePosition = -1;
+    if (this.playbackMode !== 'shuffle' || !this.ids.length) return;
+    const indices = this.ids.map((_, index) => index);
+    this.shuffleOrder =
+      keepCurrent && this.index >= 0
+        ? [this.index, ...this.shuffled(indices.filter((index) => index !== this.index))]
+        : this.shuffled(indices);
+    this.shufflePosition = 0;
+    this.index = this.shuffleOrder[0];
+  }
+  following(delta) {
+    const next =
+      this.playbackMode === 'shuffle'
+        ? this.shuffleOrder[this.shufflePosition + delta]
+        : this.index + delta;
+    return Number.isInteger(next) && next >= 0 && next < this.ids.length ? next : -1;
+  }
+  advance(delta, epoch) {
+    const next = this.following(delta);
+    if (next < 0) {
+      if (delta === 1 && this.refill) return this.refillAndPlay(epoch);
+      throw new MusicError('QUEUE_BOUNDARY');
+    }
+    this.index = next;
+    if (this.playbackMode === 'shuffle') this.shufflePosition += delta;
+    this.recovery = 0;
+    return this.startTrack(this.ids[next], 0, epoch);
+  }
+  setPlaybackMode(mode, requestId) {
+    if (!validMode(mode)) return Promise.reject(new MusicError('INVALID_ARGUMENT'));
+    const epoch = this.epoch;
+    return this.mutations.submit(requestId, 'playback-mode:' + mode, async () => {
+      this.check(epoch);
+      const changed = mode !== this.playbackMode;
+      if (changed) this.resetOrder(mode);
+      return { ...(await this.status()), changed };
+    });
   }
 }

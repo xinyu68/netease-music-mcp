@@ -59,10 +59,10 @@ try {
     stderr: 'pipe',
   });
   transport.stderr?.on('data', () => {});
-  client = new Client({ name: 'cached-plugin-acceptance', version: '0.4.0' });
+  client = new Client({ name: 'cached-plugin-acceptance', version: '0.5.0' });
   await client.connect(transport);
   report.toolCount = (await client.listTools()).tools.length;
-  assert.equal(report.toolCount, 24);
+  assert.equal(report.toolCount, 25);
   const state = await client.callTool({ name: 'netease_status', arguments: {} });
   assert.equal(state.isError, undefined);
   report.idleStatus = JSON.parse(state.content[0].text).phase;

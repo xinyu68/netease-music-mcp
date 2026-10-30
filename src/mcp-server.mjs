@@ -8,11 +8,12 @@ export function createMcpServer(runtime) {
     { name: 'netease-music', version },
     {
       instructions:
-        '本机网易云音乐助手，使用账号正常权限播放，不依赖桌面网易云。支持点歌、喜欢列表、每日推荐、心动模式、热歌榜和喜欢/取消喜欢。明确目标后直接调用对应播放入口，同名版本不明确时询问。只有playing和verified都为true才能报告已播放。控制操作需唯一requestId；重试复用原ID。收藏必须传明确liked布尔值，仅按用户意图修改；状态不确定时不反复写。音源地址和凭据不写入回复或文件。无歌单编辑/会员解锁。',
+        '本机网易云音乐助手，使用账号正常权限播放，不依赖桌面网易云。支持点歌、喜欢列表、每日推荐、心动模式、热歌榜和喜欢/取消喜欢。播放入口可传mode=sequence/shuffle/repeat_one；只切换模式用netease_play_mode，保留当前歌曲和进度。明确目标后直接调用对应播放入口，同名版本不明确时询问。只有playing和verified都为true才能报告已播放。控制操作需唯一requestId；重试复用原ID。收藏必须传明确liked布尔值，仅按用户意图修改；状态不确定时不反复写。音源地址和凭据不写入回复或文件。无歌单编辑/会员解锁。',
     }
   );
   const songId = z.string().regex(/^[1-9]\d{0,15}$/),
     requestId = z.string().min(1).max(128),
+    mode = z.enum(['sequence', 'shuffle', 'repeat_one']).optional(),
     page = {
       limit: z.number().int().min(1).max(100).default(20),
       offset: z.number().int().min(0).max(10000).default(0),
@@ -76,8 +77,12 @@ export function createMcpServer(runtime) {
   tool(
     'netease_play',
     '直接取流播放明确歌曲ID并验证真实进度',
-    { songId, requestId, level: z.enum(['standard', 'exhigh']).optional() },
-    (a) => player.play(a.songId, a.requestId, a.level ? { level: a.level } : {}),
+    { songId, requestId, level: z.enum(['standard', 'exhigh']).optional(), mode },
+    (a) =>
+      player.play(a.songId, a.requestId, {
+        ...(a.level ? { level: a.level } : {}),
+        ...(a.mode ? { mode: a.mode } : {}),
+      }),
     false
   );
   tool(
@@ -127,27 +132,28 @@ export function createMcpServer(runtime) {
   tool(
     'netease_play_liked',
     '建立我喜欢的音乐队列并开始播放',
-    { requestId },
-    (a) => player.playCollection(() => account.likedIds(), a.requestId, 'liked'),
+    { requestId, mode },
+    (a) => player.playCollection(() => account.likedIds(), a.requestId, 'liked', { mode: a.mode }),
     false
   );
   tool(
     'netease_play_playlist',
     '建立指定歌单队列并开始播放',
-    { playlistId: songId, requestId },
+    { playlistId: songId, requestId, mode },
     (a) =>
       player.playCollection(
         () => account.playlistIds(a.playlistId),
         a.requestId,
-        'playlist:' + a.playlistId
+        'playlist:' + a.playlistId,
+        { mode: a.mode }
       ),
     false
   );
   tool(
     'netease_play_daily',
     '播放账号今天的每日推荐歌曲',
-    { requestId },
-    (a) => player.playCollection(() => account.dailyIds(), a.requestId, 'daily'),
+    { requestId, mode },
+    (a) => player.playCollection(() => account.dailyIds(), a.requestId, 'daily', { mode: a.mode }),
     false
   );
   tool(
@@ -155,6 +161,7 @@ export function createMcpServer(runtime) {
     '开启网易云心动模式；默认基于我喜欢的音乐，队列结束自动获取下一批推荐',
     {
       requestId,
+      mode,
       seedSongId: songId.optional(),
       playlistId: songId.optional(),
       count: z.number().int().min(1).max(100).default(30),
@@ -168,15 +175,19 @@ export function createMcpServer(runtime) {
             count: a.count,
           }),
         a.requestId,
-        JSON.stringify(['heart', a.seedSongId, a.playlistId, a.count])
+        JSON.stringify(['heart', a.seedSongId, a.playlistId, a.count]),
+        { mode: a.mode }
       ),
     false
   );
   tool(
     'netease_play_hot_chart',
     '识别并播放网易云热歌榜，不替换为其他榜单',
-    { requestId },
-    (a) => player.playCollection(() => account.hotChartIds(), a.requestId, 'hot-chart'),
+    { requestId, mode },
+    (a) =>
+      player.playCollection(() => account.hotChartIds(), a.requestId, 'hot-chart', {
+        mode: a.mode,
+      }),
     false
   );
   tool(
@@ -193,6 +204,13 @@ export function createMcpServer(runtime) {
       }
       return account.setLiked(id, a.liked, a.requestId);
     },
+    false
+  );
+  tool(
+    'netease_play_mode',
+    '切换顺序、随机或单曲循环，保留当前歌曲、进度和暂停状态；随机队列每首一次，单曲循环不阻止手动切歌',
+    { mode: z.enum(['sequence', 'shuffle', 'repeat_one']), requestId },
+    (a) => player.setPlaybackMode(a.mode, a.requestId),
     false
   );
   return server;

@@ -47,7 +47,7 @@ class FakeEngine extends EventEmitter {
     this.s.paused = true;
   }
 }
-function rig() {
+function rig(options = {}) {
   const engine = new FakeEngine();
   let resolves = 0;
   const resolver = {
@@ -69,7 +69,13 @@ function rig() {
       return { id, title: 'track ' + id, artists: ['test'] };
     },
   };
-  const c = new PlaybackController({ engine, resolver, catalog, config: validateConfig() });
+  const c = new PlaybackController({
+    engine,
+    resolver,
+    catalog,
+    config: validateConfig(),
+    ...options,
+  });
   return { c, engine, resolver, count: () => resolves };
 }
 async function until(predicate) {
@@ -304,4 +310,214 @@ test('pause during heart refill preserves the ability to continue into a new bat
   await delay(10);
   assert.equal(c.state.phase, 'paused');
   assert.equal((await c.resume('resume')).songId, '3');
+});
+
+test('mode switching preserves playback and pause position, deduplicates and rejects invalid modes', async () => {
+  const { c, engine } = rig({ randomIndex: () => 0 });
+  await c.playCollection(async () => ({ ids: ['1', '2', '3'] }), 'list', 'list');
+  await c.seek(42, 'seek');
+  const shuffled = await c.setPlaybackMode('shuffle', 'mode');
+  assert.equal(shuffled.playing, true);
+  assert.equal(shuffled.songId, '1');
+  assert.ok(shuffled.position >= 42);
+  assert.equal(shuffled.queue.playbackMode, 'shuffle');
+  assert.equal(shuffled.changed, true);
+  await c.setPlaybackMode('shuffle', 'mode');
+  assert.equal((await c.setPlaybackMode('shuffle', 'same-mode')).changed, false);
+  assert.equal(engine.loads.length, 1);
+  await assert.rejects(c.setPlaybackMode('sequence', 'mode'), (e) => e.code === 'REQUEST_CONFLICT');
+  await assert.rejects(c.setPlaybackMode('invalid', 'bad'), (e) => e.code === 'INVALID_ARGUMENT');
+  await c.pause('pause');
+  const paused = await c.setPlaybackMode('repeat_one', 'repeat');
+  assert.equal(paused.paused, true);
+  assert.equal(paused.songId, '1');
+  assert.ok(paused.position >= 42);
+  assert.equal(engine.loads.length, 1);
+  const resumed = await c.resume('resume');
+  assert.equal(resumed.queue.playbackMode, 'repeat_one');
+  assert.equal(resumed.playing, true);
+});
+
+test('shuffle chooses from the full queue, preserves navigation history and visits every item once', async () => {
+  const { c, engine } = rig({ randomIndex: () => 0 });
+  const first = await c.playCollection(async () => ({ ids: ['1', '2', '3'] }), 'list', 'list', {
+    mode: 'shuffle',
+  });
+  assert.equal(first.songId, '2');
+  assert.deepEqual(first.queue.items, ['2', '3', '1']);
+  const next = await c.move(1, 'next');
+  assert.equal(next.songId, '3');
+  assert.equal(next.queue.index, 1);
+  assert.equal((await c.move(-1, 'back')).songId, '2');
+  assert.equal((await c.move(1, 'forward')).songId, '3');
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => c.state.songId === '1' && c.state.phase === 'playing');
+  const final = await c.status();
+  assert.equal(final.queue.index, 2);
+  assert.deepEqual(final.queue.items, ['1']);
+  await assert.rejects(c.move(1, 'boundary'), (e) => e.code === 'QUEUE_BOUNDARY');
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => c.state.phase === 'ended');
+  assert.deepEqual(
+    engine.loads.map((load) => load.source.songId),
+    ['2', '3', '2', '3', '1']
+  );
+});
+
+test('returning from shuffle to sequence preserves the song and restores the original list order', async () => {
+  const { c, engine } = rig({ randomIndex: () => 0 });
+  await c.playCollection(async () => ({ ids: ['1', '2', '3', '4'] }), 'list', 'list', {
+    mode: 'shuffle',
+  });
+  assert.equal(c.state.songId, '2');
+  const sequential = await c.setPlaybackMode('sequence', 'sequence');
+  assert.equal(sequential.songId, '2');
+  assert.deepEqual(sequential.queue.items, ['2', '3', '4']);
+  assert.equal(engine.loads.length, 1);
+  assert.equal((await c.move(1, 'next')).songId, '3');
+});
+
+test('repeat-one replays EOF from zero, ignores stale events and still allows manual track changes', async () => {
+  const { c, engine } = rig();
+  await c.playCollection(async () => ({ ids: ['1', '2', '3'] }), 'list', 'list', {
+    mode: 'repeat_one',
+  });
+  const old = engine.generation;
+  await c.seek(179, 'near-end');
+  engine.emit('end-file', { reason: 'eof', generation: old });
+  await until(() => engine.loads.length === 2 && c.state.phase === 'playing');
+  assert.equal(c.state.songId, '1');
+  assert.equal(engine.loads[1].options.position, 0);
+  engine.emit('end-file', { reason: 'eof', generation: old });
+  await delay(20);
+  assert.equal(engine.loads.length, 2);
+  assert.equal((await c.move(1, 'next')).songId, '2');
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => engine.loads.length === 4 && c.state.phase === 'playing');
+  assert.equal(c.state.songId, '2');
+  await c.setPlaybackMode('sequence', 'sequence');
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => c.state.songId === '3' && c.state.phase === 'playing');
+});
+
+test('repeat-one does not restart a paused song or a stopped in-flight replay', async () => {
+  const { c, engine, resolver } = rig();
+  await c.play('1', 'play', { mode: 'repeat_one' });
+  await c.pause('pause');
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await delay(20);
+  assert.equal(c.state.phase, 'paused');
+  assert.equal(engine.loads.length, 1);
+  await c.resume('resume');
+  let release;
+  resolver.resolve = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => Boolean(release));
+  await c.stop('stop');
+  release({
+    songId: '1',
+    url: 'https://m801.music.126.net/test',
+    duration: 180,
+    expiresAt: Date.now() + 60000,
+  });
+  await delay(20);
+  assert.equal(c.state.phase, 'stopped');
+  assert.equal(engine.loads.length, 1);
+});
+
+test('shuffle and repeat-one coexist with heart recommendations without premature refill', async () => {
+  const { c, engine } = rig({ randomIndex: () => 0 });
+  let calls = 0;
+  await c.playCollection(
+    async () => ({
+      ids: ['1', '2', '3'],
+      refill: async () => {
+        calls++;
+        return { ids: ['4', '5'] };
+      },
+    }),
+    'heart',
+    'heart',
+    { mode: 'shuffle' }
+  );
+  assert.equal(c.state.songId, '2');
+  assert.equal((await c.move(1, 'next-1')).songId, '3');
+  assert.equal((await c.move(1, 'next-2')).songId, '1');
+  assert.equal(calls, 0);
+  const refilled = await c.move(1, 'refill');
+  assert.equal(refilled.songId, '5');
+  assert.equal(refilled.queue.mode, 'heart');
+  assert.equal(refilled.queue.playbackMode, 'shuffle');
+  assert.deepEqual(refilled.queue.items, ['5', '4']);
+  assert.equal(calls, 1);
+  assert.equal((await c.move(-1, 'previous')).songId, '1');
+  await c.setPlaybackMode('repeat_one', 'repeat');
+  const loads = engine.loads.length;
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => engine.loads.length === loads + 1 && c.state.phase === 'playing');
+  assert.equal(c.state.songId, '1');
+  assert.equal(calls, 1);
+});
+
+test('playback mode persists across queue replacement and stop; explicit mode is part of deduplication', async () => {
+  const { c } = rig({ randomIndex: () => 0 });
+  await c.setPlaybackMode('shuffle', 'mode');
+  const playing = await c.playCollection(async () => ({ ids: ['1', '2'] }), 'list', 'list');
+  assert.equal(playing.songId, '2');
+  await assert.rejects(
+    c.playCollection(async () => ({ ids: ['1', '2'] }), 'list', 'list', { mode: 'repeat_one' }),
+    (e) => e.code === 'REQUEST_CONFLICT'
+  );
+  assert.equal((await c.stop('stop')).queue.playbackMode, 'shuffle');
+  const next = await c.play('3', 'play', { mode: 'repeat_one' });
+  assert.equal(next.queue.playbackMode, 'repeat_one');
+  assert.equal((await c.play('4', 'play-again')).queue.playbackMode, 'repeat_one');
+});
+
+test('shuffle heart refill remaps navigation history when the bounded queue drops old entries', async () => {
+  const { c } = rig({ randomIndex: () => 0 });
+  await c.playCollection(
+    async () => ({ ids: ['1', '2', '3'], refill: async () => ({ ids: ['4', '5'] }) }),
+    'heart',
+    'heart',
+    { mode: 'shuffle' }
+  );
+  await c.move(1, 'next-1');
+  await c.move(1, 'next-2');
+  // Represent an already-consumed history window without playing ten thousand fake tracks.
+  const prefix = Array.from({ length: 9997 }, (_, i) => String(i + 100));
+  c.ids = [...prefix, ...c.ids];
+  c.index += prefix.length;
+  c.shuffleOrder = [
+    ...prefix.map((_, i) => i),
+    ...c.shuffleOrder.map((index) => index + prefix.length),
+  ];
+  c.shufflePosition += prefix.length;
+  const refilled = await c.move(1, 'refill');
+  assert.equal(refilled.queue.length, 10000);
+  assert.equal(refilled.queue.index, 9998);
+  assert.deepEqual(refilled.queue.items, ['5', '4']);
+  assert.ok(c.shuffleOrder.every((index) => index >= 0 && index < c.ids.length));
+  assert.equal((await c.move(-1, 'back')).songId, '1');
+  assert.equal((await c.move(1, 'forward')).songId, '5');
+  assert.equal((await c.move(1, 'next-new')).songId, '4');
+});
+
+test('repeat-one stops on an authorization failure instead of repeatedly retrying a protected song', async () => {
+  const { c, engine, resolver } = rig();
+  await c.play('1', 'play', { mode: 'repeat_one' });
+  let calls = 0;
+  resolver.resolve = async () => {
+    calls++;
+    throw new MusicError('NO_PLAY_PERMISSION');
+  };
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => c.state.phase === 'error');
+  await delay(20);
+  assert.equal(calls, 1);
+  assert.equal(engine.loads.length, 1);
+  assert.equal(c.state.lastError.code, 'NO_PLAY_PERMISSION');
 });
