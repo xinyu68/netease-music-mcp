@@ -12,3 +12,9 @@
 早期原型参考的第三方客户端自动化、orpheus 命令与 Windows 内存采集代码已退出正式运行链路，并移入本机忽略的历史目录；当前产品源码没有继续依赖这些适配器。
 
 MCP 文档和 JSON IPC 行为分别参考 [OpenAI MCP 文档](https://learn.chatgpt.com/docs/extend/mcp) 与 [mpv JSON IPC 官方手册](https://mpv.io/manual/stable/#json-ipc)。API 接口为非官方开放接口，项目并非网易云官方产品。
+
+## 网易云音乐图标
+
+`plugin/assets/netease-music.png` 是网易云音乐官方 App 图标，用于标识本插件所连接的服务。来源为杭州网易云音乐科技有限公司在 [Apple App Store 的网易云音乐页面](https://apps.apple.com/cn/app/id590338362)，获取日期为 2026-10-30；[原始 512×512 PNG](https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/7b/ae/3a/7bae3a3e-2581-10f8-aa40-8bb0cd961c8e/appIconNew-0-0-1x_U007epad-0-1-0-85-220.png/512x512bb.png)。文件 SHA-256：`6de39dd642a5fa86a6dab4e4f12a3c7fa1a29fafbf3c67edad2c0b1d689a21f0`。
+
+图标及网易云音乐商标的权利归相应权利人所有，不属于本项目原创源码的 MIT 授权范围；使用该图标不表示本项目获得网易云音乐官方背书。

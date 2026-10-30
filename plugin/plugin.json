@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "netease-music-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "使用自己的网易云账号，在电脑上通过 Codex 搜歌、播放歌单和控制音乐。",
   "author": { "name": "xinyu.wang" },
   "license": "MIT",
@@ -12,6 +12,8 @@
         "displayName": "网易云音乐",
         "shortDescription": "在 Codex 中点歌和控制电脑音乐",
         "category": "Entertainment",
+        "logo": "./assets/netease-music.png",
+        "composerIcon": "./assets/netease-music.png",
         "defaultPrompt": "播放我喜欢的音乐"
       }
     }
