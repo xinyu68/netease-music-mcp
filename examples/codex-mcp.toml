@@ -1,0 +1,8 @@
+# Run `npm run mcp:config` to print the actual paths for your machine.
+# Copy the result into your MCP client's configuration only when using the standalone entry.
+# If using the Codex plugin, do not add a second standalone connection.
+[mcp_servers.netease_music]
+command = "node"
+args = ["/absolute/path/to/netease-music-mcp/src/server.mjs"]
+startup_timeout_sec = 15
+tool_timeout_sec = 60

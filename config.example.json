@@ -1,0 +1,10 @@
+{
+  "playback": {
+    "backend": "direct",
+    "level": "exhigh",
+    "volume": 30,
+    "bufferBytes": 4194304,
+    "cacheSeconds": 10
+  },
+  "api": { "timeoutMs": 12000 }
+}

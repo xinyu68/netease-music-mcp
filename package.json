@@ -1,0 +1,71 @@
+{
+  "name": "local-netease-music-mcp",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Local account-authorized NetEase Music MCP with independent streaming playback",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xinyu68/netease-music-mcp.git"
+  },
+  "homepage": "https://github.com/xinyu68/netease-music-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/xinyu68/netease-music-mcp/issues"
+  },
+  "bin": {
+    "netease-music-mcp": "src/server.mjs"
+  },
+  "files": [
+    "src/",
+    "scripts/",
+    "tools/",
+    "test/",
+    "vendor/login/windows/",
+    "vendor/login/macos/",
+    "vendor/desk-companion/LICENSE",
+    "LICENSE",
+    "plugin/",
+    ".agents/plugins/marketplace.json",
+    "examples/",
+    ".prettierrc.json",
+    "CHANGELOG.md",
+    "README.md",
+    "AGENTS.md",
+    "THIRD_PARTY_NOTICES.md",
+    "config.example.json",
+    "docs/*.md",
+    "package-lock.json"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "setup": "npm run setup:player && npm run build:login",
+    "onboard": "node scripts/setup.mjs",
+    "plugin:build": "node scripts/build-plugin.mjs",
+    "plugin:install": "node scripts/install-plugin.mjs",
+    "verify:plugin": "node scripts/verify-plugin.mjs",
+    "mcp:config": "node scripts/print-mcp-config.mjs",
+    "setup:player": "node scripts/setup-player.mjs",
+    "build:login": "node scripts/build-login.mjs",
+    "login": "node scripts/login-native.mjs",
+    "auth:import": "node scripts/import-session.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "test": "node --test test/*.test.mjs",
+    "verify": "node scripts/verify.mjs",
+    "bundle": "node scripts/bundle.mjs",
+    "format": "prettier --write \"{src,scripts,test}/*.mjs\" \"*.json\" \"tools/*.json\" \"plugin/**/*.{mjs,json}\" \"plugin/.mcp.json\" \"plugin/.codex-plugin/*.json\" \".agents/plugins/*.json\"",
+    "format:check": "prettier --check \"{src,scripts,test}/*.mjs\" \"*.json\" \"tools/*.json\" \"plugin/**/*.{mjs,json}\" \"plugin/.mcp.json\" \"plugin/.codex-plugin/*.json\" \".agents/plugins/*.json\"",
+    "check": "npm run format:check && node scripts/check-syntax.mjs && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@neteasecloudmusicapienhanced/api": "https://codeload.github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/tar.gz/b7bf2b527c5c0b2e67515f1573a4aa40f3b556fa",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}

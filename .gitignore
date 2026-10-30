@@ -1,0 +1,14 @@
+node_modules/
+config.local.json
+evidence/
+*.log
+.tools/
+.data/
+docs/history/*.local.json
+vendor/login/windows-x64/
+vendor/login/macos-arm64/
+vendor/login/macos-x64/
+*.nupkg
+*.tgz
+dist/
+.codex/config.toml
