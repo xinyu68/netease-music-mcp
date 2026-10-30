@@ -37,6 +37,10 @@ export function safeError(error) {
     NOTHING_TO_PLAY: '当前没有可以继续播放的歌曲',
     INVALID_ARGUMENT: '参数无效',
     QUEUE_BOUNDARY: '已到播放队列边界',
+    HOT_CHART_UNAVAILABLE: '未能唯一识别网易云热歌榜，请稍后重试',
+    NO_HEART_SEED: '歌单中还没有歌曲，暂时无法开启心动模式',
+    INVALID_HEART_SEED: '心动模式的起始歌曲需要属于所选歌单',
+    MUTATION_UNCERTAIN: '暂未确认收藏状态，请先查询或稍后核实，不要连续重复提交',
   };
   return { code, message: messages[code] || '音乐操作失败，请查看本地诊断状态' };
 }

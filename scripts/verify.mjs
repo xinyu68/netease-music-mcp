@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 // This opt-in acceptance test produces sound and uses the current account.
-const client = new Client({ name: 'netease-direct-acceptance', version: '0.2.0' });
+const client = new Client({ name: 'netease-direct-acceptance', version: '0.4.0' });
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [fileURLToPath(new URL('../src/server.mjs', import.meta.url))],
@@ -51,7 +51,7 @@ try {
   await client.connect(transport);
   connected = true;
   report.toolNames = (await client.listTools()).tools.map((t) => t.name);
-  assert.equal(report.toolNames.length, 20);
+  assert.equal(report.toolNames.length, 24);
   const account = await call('netease_account_status');
   assert.equal(account.loggedIn, true);
   report.account = { loggedIn: account.loggedIn, isVip: account.isVip, vipType: account.vipType };
@@ -137,7 +137,32 @@ try {
   assert.equal(stopped.position, 0);
   assert.equal(stopped.playing, false);
   report.stoppedAndUnloaded = true;
-  assert.equal(new Set(report.calls.map((c) => c.name)).size, 20);
+  const daily = await mutate('netease_play_daily');
+  assert.equal(daily.playing, true);
+  assert.ok(daily.queue.length > 0);
+  const hot = await mutate('netease_play_hot_chart');
+  assert.equal(hot.playing, true);
+  assert.equal(hot.queue.name, '热歌榜');
+  const heart = await mutate('netease_play_heart_mode');
+  assert.equal(heart.playing, true);
+  assert.equal(heart.queue.mode, 'heart');
+  // This verifies the already-liked no-op path. The default live test does not unlike songs.
+  const favorite = await mutate('netease_like', { songId: selected.id, liked: true });
+  assert.equal(favorite.verified, true);
+  assert.equal(favorite.changed, false);
+  report.discovery = {
+    daily: daily.queue.length,
+    hotChart: hot.queue.length,
+    heart: heart.queue.length,
+    heartMode: heart.queue.mode,
+  };
+  report.favorite = {
+    verified: favorite.verified,
+    changed: favorite.changed,
+    actualMutationTested: false,
+  };
+  await mutate('netease_stop');
+  assert.equal(new Set(report.calls.map((c) => c.name)).size, 24);
   report.passed = true;
 } catch (error) {
   report.passed = false;

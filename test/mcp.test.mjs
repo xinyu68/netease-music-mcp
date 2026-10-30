@@ -7,7 +7,13 @@ import { MusicError } from '../src/errors.mjs';
 async function rig() {
   const calls = [];
   const runtime = {
-    account: { status: async () => ({ loggedIn: true, isVip: true }) },
+    account: {
+      status: async () => ({ loggedIn: true, isVip: true }),
+      setLiked: async (...args) => {
+        calls.push(['like', ...args]);
+        return { liked: args[1], verified: true };
+      },
+    },
     catalog: {
       search: async () => {
         throw Error('MUSIC_U=must-not-leak https://cdn.test/signed?secret=x');
@@ -18,7 +24,7 @@ async function rig() {
         calls.push(args);
         return { verified: true, songId: args[0] };
       },
-      status: async () => ({ phase: 'idle' }),
+      status: async () => ({ phase: 'playing', songId: '1' }),
       stop: async () => ({ phase: 'stopped' }),
     },
     engine: { start: async () => {} },
@@ -37,13 +43,34 @@ async function rig() {
     },
   };
 }
-test('MCP lists the formal direct-stream tools without exposing raw URL or account write tools', async () => {
+test('MCP lists the supported music tools without exposing raw URLs or unrelated account writes', async () => {
   const r = await rig();
   try {
     const tools = (await r.client.listTools()).tools;
-    assert.equal(tools.length, 20);
+    assert.equal(tools.length, 24);
+    assert.equal(tools.find((t) => t.name === 'netease_like').annotations.readOnlyHint, false);
     assert.ok(tools.some((t) => t.name === 'netease_play_liked'));
     assert.ok(!tools.some((t) => /download|cookie|create_playlist|delete/.test(t.name)));
+  } finally {
+    await r.close();
+  }
+});
+
+test('favorite tool requires a boolean and resolves current-song unlike without flipping the intent', async () => {
+  const r = await rig();
+  try {
+    const bad = await r.client.callTool({
+      name: 'netease_like',
+      arguments: { requestId: 'bad', liked: 'false' },
+    });
+    assert.equal(bad.isError, true);
+    assert.equal(r.calls.length, 0);
+    const good = await r.client.callTool({
+      name: 'netease_like',
+      arguments: { requestId: 'good', liked: false },
+    });
+    assert.notEqual(good.isError, true);
+    assert.deepEqual(r.calls[0], ['like', '1', false, 'good']);
   } finally {
     await r.close();
   }

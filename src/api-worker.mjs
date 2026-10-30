@@ -1,17 +1,9 @@
 import { createRequire } from 'node:module';
+import { readOnlyMethods, writeMethods } from './api-methods.mjs';
 for (const method of ['log', 'warn', 'error']) console[method] = () => {};
 process.env.DOTENV_CONFIG_QUIET = 'true';
 const api = createRequire(import.meta.url)('@neteasecloudmusicapienhanced/api');
-const allowed = new Set([
-  'login_status',
-  'user_account',
-  'user_playlist',
-  'playlist_detail',
-  'song_detail',
-  'song_url_v1',
-  'lyric',
-  'cloudsearch',
-]);
+const allowed = new Set([...readOnlyMethods, ...writeMethods]);
 process.on('message', async (message) => {
   if (!message || !allowed.has(message.method) || !Number.isInteger(message.id)) return;
   try {

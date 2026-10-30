@@ -19,6 +19,9 @@ export class PlaybackController {
     this.ids = [];
     this.index = -1;
     this.queueName = '';
+    this.queueMode = 'sequence';
+    this.refill = null;
+    this.needsRefill = false;
     this.recovery = 0;
     this.state = {
       phase: 'idle',
@@ -47,6 +50,7 @@ export class PlaybackController {
   queue() {
     return {
       name: this.queueName,
+      mode: this.queueMode,
       length: this.ids.length,
       index: this.index,
       items: this.ids.slice(Math.max(0, this.index), Math.max(0, this.index) + 5),
@@ -168,6 +172,9 @@ export class PlaybackController {
         this.ids = [String(id)];
         this.index = 0;
         this.queueName = '';
+        this.queueMode = 'sequence';
+        this.refill = null;
+        this.needsRefill = false;
         this.recovery = 0;
         return this.startTrack(String(id), 0, epoch, level);
       }
@@ -179,6 +186,10 @@ export class PlaybackController {
       this.check(epoch);
       const active = new AbortController();
       this.active = active;
+      this.generation++;
+      this.refill = null;
+      this.needsRefill = false;
+      this.queueMode = 'sequence';
       this.state.phase = 'starting';
       try {
         await this.engine.stop();
@@ -193,6 +204,8 @@ export class PlaybackController {
           throw new MusicError('NOTHING_TO_PLAY');
         this.ids = collection.ids.map(String);
         this.queueName = collection.name || '';
+        this.refill = typeof collection.refill === 'function' ? collection.refill : null;
+        this.queueMode = this.refill ? 'heart' : 'sequence';
         this.index = 0;
         this.recovery = 0;
         return await this.startTrack(this.ids[0], 0, epoch);
@@ -241,6 +254,7 @@ export class PlaybackController {
     return this.mutations.submit(requestId, 'resume', async () => {
       this.check(epoch);
       if (this.state.phase === 'playing') return { ...(await this.status()), changed: false };
+      if (this.needsRefill && this.refill) return this.refillAndPlay(epoch);
       if (!this.state.songId) throw new MusicError('NOTHING_TO_PLAY');
       const s = await this.engine.snapshot();
       const position = ['ended', 'stopped'].includes(this.state.phase) ? 0 : this.state.position;
@@ -269,6 +283,9 @@ export class PlaybackController {
         this.active?.abort();
         await this.engine.stop();
         this.source = null;
+        this.refill = null;
+        this.needsRefill = false;
+        this.queueMode = 'sequence';
         this.state = {
           ...this.state,
           phase: 'stopped',
@@ -326,6 +343,7 @@ export class PlaybackController {
     return this.mutations.submit(requestId, 'move:' + delta, async () => {
       this.check(epoch);
       const next = this.index + delta;
+      if (delta === 1 && next === this.ids.length && this.refill) return this.refillAndPlay(epoch);
       if (![1, -1].includes(delta) || next < 0 || next >= this.ids.length)
         throw new MusicError('QUEUE_BOUNDARY');
       this.index = next;
@@ -364,17 +382,64 @@ export class PlaybackController {
           this.recovery = 0;
           return this.startTrack(this.ids[this.index], 0, epoch);
         }
+        if (this.state.phase === 'playing' && this.refill) return this.refillAndPlay(epoch);
         this.state.phase = 'ended';
         this.state.position = this.state.duration;
         this.state.verified = false;
       })
       .catch(() => {});
   }
+  async refillAndPlay(epoch) {
+    this.check(epoch);
+    const refill = this.refill;
+    if (!refill) throw new MusicError('QUEUE_BOUNDARY');
+    const active = new AbortController();
+    this.active = active;
+    const generation = ++this.generation;
+    this.needsRefill = true;
+    this.state.phase = 'starting';
+    this.state.verified = false;
+    this.state.lastError = null;
+    try {
+      await this.engine.stop();
+      this.check(epoch, active.signal);
+      const collection = await abortable(refill(this.state.songId), active.signal);
+      this.check(epoch, active.signal);
+      if (
+        !Array.isArray(collection.ids) ||
+        collection.ids.length > 10000 ||
+        !collection.ids.every(validId)
+      )
+        throw new MusicError('INVALID_RESPONSE');
+      const ids = [...new Set(collection.ids.map(String))].filter((id) => id !== this.state.songId);
+      if (!ids.length) throw new MusicError('NOTHING_TO_PLAY');
+      this.ids.push(...ids);
+      this.index++;
+      if (this.ids.length > 10000) {
+        const trim = this.ids.length - 10000;
+        this.ids.splice(0, trim);
+        this.index -= trim;
+      }
+      this.needsRefill = false;
+      this.recovery = 0;
+      return await this.startTrack(this.ids[this.index], 0, epoch);
+    } catch (error) {
+      if (epoch === this.epoch && generation === this.generation) {
+        this.state.phase = 'error';
+        this.state.lastError = safeError(error);
+      }
+      throw error;
+    } finally {
+      if (this.active === active) this.active = null;
+    }
+  }
   async close() {
     this.closed = true;
     this.epoch++;
     this.generation++;
     this.active?.abort();
+    this.refill = null;
+    this.needsRefill = false;
     await this.engine.close();
     this.source = null;
     this.state.phase = 'stopped';

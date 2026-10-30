@@ -2,6 +2,8 @@ import { loadConfig } from './config.mjs';
 import { AuthStore } from './auth.mjs';
 import { ApiClient } from './api-client.mjs';
 import { MusicError } from './errors.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { Mutations } from './async.mjs';
 export { allowSession } from './auth.mjs';
 
 export class Account {
@@ -10,6 +12,8 @@ export class Account {
     this.sessionProvider = sessionProvider;
     this.authStore = authStore;
     this.worker = worker;
+    this.writes = new Mutations();
+    this.closed = false;
   }
   async session() {
     if (this.sessionProvider) return this.sessionProvider();
@@ -186,6 +190,134 @@ export class Account {
     return this.playlistIds(p[0].id);
   }
   close() {
+    this.closed = true;
     this.worker?.close();
+  }
+
+  async invoke(method, params = {}) {
+    if (
+      !['recommend_songs', 'playmode_intelligence_list', 'toplist', 'likelist', 'like'].includes(
+        method
+      )
+    )
+      throw new MusicError('INVALID_ARGUMENT');
+    const session = await this.session();
+    if (!this.api) {
+      this.worker ??= new ApiClient((await loadConfig()).api);
+      this.api = this.worker.proxy();
+    }
+    const response = await this.api[method]({
+      ...params,
+      cookie: session.cookieHeader,
+      timestamp: Date.now(),
+    });
+    const body = response.body || response;
+    if (Number(body.code) === 301) {
+      this.authStore?.clear();
+      throw new MusicError('LOGIN_REQUIRED');
+    }
+    if (Number(body.code) !== 200) throw new MusicError('API_ERROR');
+    return body;
+  }
+
+  collectionIds(items, getId = (item) => item?.id) {
+    if (!Array.isArray(items)) throw new MusicError('INVALID_RESPONSE');
+    const ids = [...new Set(items.map(getId).map((id) => String(id)))];
+    if (ids.some((id) => !/^[1-9]\d{0,15}$/.test(id))) throw new MusicError('INVALID_RESPONSE');
+    if (!ids.length) throw new MusicError('NOTHING_TO_PLAY');
+    return ids;
+  }
+
+  async favoritePlaylist() {
+    const all = await this.playlists();
+    const matches = all.playlists.filter((p) => p.owned && p.specialType === 5);
+    if (matches.length !== 1) throw new MusicError('INVALID_RESPONSE');
+    return matches[0];
+  }
+
+  async dailyIds() {
+    await this.status();
+    const body = await this.invoke('recommend_songs');
+    return { name: '每日推荐', ids: this.collectionIds(body.data?.dailySongs ?? body.recommend) };
+  }
+
+  async hotChartIds() {
+    await this.status();
+    const body = await this.invoke('toplist');
+    if (!Array.isArray(body.list)) throw new MusicError('INVALID_RESPONSE');
+    const matches = body.list.filter((item) =>
+      ['热歌榜', '云音乐热歌榜', '网易云热歌榜'].includes(item.name)
+    );
+    if (matches.length !== 1) throw new MusicError('HOT_CHART_UNAVAILABLE');
+    const collection = await this.playlistIds(String(matches[0].id));
+    return { ...collection, name: '热歌榜' };
+  }
+
+  async intelligencePage(seedSongId, playlistId, startSongId, count) {
+    const body = await this.invoke('playmode_intelligence_list', {
+      id: seedSongId,
+      pid: playlistId,
+      sid: startSongId,
+      count,
+    });
+    return {
+      name: '心动模式',
+      ids: this.collectionIds(body.data, (item) => item?.songInfo?.id ?? item?.id),
+    };
+  }
+
+  async heartModeIds({ seedSongId, playlistId, count = 30 } = {}) {
+    if (!Number.isInteger(count) || count < 1 || count > 100)
+      throw new MusicError('INVALID_ARGUMENT');
+    const id = playlistId ?? (await this.favoritePlaylist()).id;
+    const base = await this.playlistIds(id);
+    if (!base.ids.length) throw new MusicError('NO_HEART_SEED');
+    const seed = seedSongId ?? base.ids[0];
+    if (!base.ids.includes(String(seed))) throw new MusicError('INVALID_HEART_SEED');
+    const first = await this.intelligencePage(String(seed), String(id), String(seed), count);
+    return {
+      ...first,
+      mode: 'heart',
+      refill: (lastSongId) => this.intelligencePage(String(seed), String(id), lastSongId, count),
+    };
+  }
+
+  async isLiked(songId) {
+    const account = await this.status();
+    const body = await this.invoke('likelist', { uid: account.userId });
+    if (!Array.isArray(body.ids)) throw new MusicError('INVALID_RESPONSE');
+    return body.ids.some((id) => String(id) === String(songId));
+  }
+
+  setLiked(songId, liked, requestId) {
+    return this.writes.submit(requestId, JSON.stringify(['like', String(songId), liked]), () => {
+      if (this.closed) throw new MusicError('CANCELLED');
+      return this.applyLiked(songId, liked);
+    });
+  }
+
+  async applyLiked(songId, liked) {
+    if (!/^[1-9]\d{0,15}$/.test(String(songId)) || typeof liked !== 'boolean')
+      throw new MusicError('INVALID_ARGUMENT');
+    const before = await this.isLiked(songId);
+    if (before === liked) return { songId: String(songId), liked, changed: false, verified: true };
+    let failure;
+    // This provider expects a string; passing boolean false would be interpreted as true.
+    try {
+      await this.invoke('like', { id: String(songId), like: String(liked) });
+    } catch (error) {
+      failure = error;
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt) await delay(250);
+      try {
+        if ((await this.isLiked(songId)) === liked)
+          return { songId: String(songId), liked, changed: true, verified: true };
+      } catch {
+        break;
+      }
+    }
+    if (failure && failure.code !== 'API_TIMEOUT') throw failure;
+    throw new MusicError('MUTATION_UNCERTAIN');
   }
 }

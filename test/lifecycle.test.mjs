@@ -30,7 +30,7 @@ test('real stdio process starts lazily without credentials or mpv, returns a log
   try {
     await client.connect(transport);
     pid = transport.pid;
-    assert.equal((await client.listTools()).tools.length, 20);
+    assert.equal((await client.listTools()).tools.length, 24);
     const state = await client.callTool({ name: 'netease_status', arguments: {} });
     assert.equal(JSON.parse(state.content[0].text).phase, 'idle');
     const result = await client.callTool({ name: 'netease_account_status', arguments: {} });

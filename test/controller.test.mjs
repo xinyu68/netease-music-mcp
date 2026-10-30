@@ -218,3 +218,90 @@ test('public state never exposes private playback URLs and close cancels pending
   await c.close();
   await assert.rejects(c.play('2', 'late'), (e) => e.code === 'CANCELLED');
 });
+
+test('heart mode automatically refills at EOF and ordinary playback exits the mode', async () => {
+  const { c, engine } = rig();
+  let calls = 0;
+  await c.playCollection(
+    async () => ({
+      name: '心动模式',
+      ids: ['1'],
+      refill: async (last) => {
+        calls++;
+        assert.equal(last, '1');
+        return { ids: ['1', '2', '2'] };
+      },
+    }),
+    'heart',
+    'heart'
+  );
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => c.state.songId === '2' && c.state.phase === 'playing');
+  assert.equal(calls, 1);
+  assert.equal(c.queue().mode, 'heart');
+  await c.play('9', 'ordinary');
+  assert.equal(c.queue().mode, 'sequence');
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => c.state.phase === 'ended');
+  assert.equal(calls, 1);
+});
+
+test('next at the end of a heart batch obtains another batch without model involvement', async () => {
+  const { c } = rig();
+  await c.playCollection(
+    async () => ({ ids: ['1'], refill: async () => ({ ids: ['2'] }) }),
+    'heart',
+    'heart'
+  );
+  assert.equal((await c.move(1, 'next')).songId, '2');
+});
+
+test('stop cancels a heart refill and late recommendations cannot restart playback', async () => {
+  const { c, engine } = rig();
+  let release;
+  await c.playCollection(
+    async () => ({
+      ids: ['1'],
+      refill: () =>
+        new Promise((r) => {
+          release = r;
+        }),
+    }),
+    'heart',
+    'heart'
+  );
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => Boolean(release));
+  await c.stop('stop');
+  release({ ids: ['2'] });
+  await delay(20);
+  assert.equal(engine.loads.length, 1);
+  assert.equal(c.state.phase, 'stopped');
+  assert.equal(c.queue().mode, 'sequence');
+});
+
+test('pause during heart refill preserves the ability to continue into a new batch', async () => {
+  const { c, engine } = rig();
+  let release,
+    calls = 0;
+  await c.playCollection(
+    async () => ({
+      ids: ['1'],
+      refill: () =>
+        ++calls === 1
+          ? new Promise((r) => {
+              release = r;
+            })
+          : Promise.resolve({ ids: ['3'] }),
+    }),
+    'heart',
+    'heart'
+  );
+  engine.emit('end-file', { reason: 'eof', generation: engine.generation });
+  await until(() => Boolean(release));
+  await c.pause('pause');
+  release({ ids: ['2'] });
+  await delay(10);
+  assert.equal(c.state.phase, 'paused');
+  assert.equal((await c.resume('resume')).songId, '3');
+});

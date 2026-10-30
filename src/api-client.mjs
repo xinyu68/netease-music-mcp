@@ -1,6 +1,7 @@
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { MusicError } from './errors.mjs';
+import { readOnlyMethods, writeMethods } from './api-methods.mjs';
 export class ApiClient {
   constructor({ timeoutMs = 12000, forkImpl = fork } = {}) {
     this.timeoutMs = timeoutMs;
@@ -44,11 +45,13 @@ export class ApiClient {
     child.on('exit', failed);
   }
   async call(method, params = {}) {
+    if (!readOnlyMethods.has(method) && !writeMethods.has(method))
+      throw new MusicError('INVALID_ARGUMENT');
     try {
       return await this.callOnce(method, params);
     } catch (error) {
-      // All worker endpoints are read-only. A timed-out worker is discarded before one retry.
-      if (error.code !== 'API_TIMEOUT' || this.closed) throw error;
+      // Only reads may retry. A write timeout must be reconciled by reading account state.
+      if (error.code !== 'API_TIMEOUT' || this.closed || !readOnlyMethods.has(method)) throw error;
       return this.callOnce(method, params);
     }
   }

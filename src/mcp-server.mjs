@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { safeError } from './errors.mjs';
+import { MusicError, safeError } from './errors.mjs';
 import { version } from './version.mjs';
 export function createMcpServer(runtime) {
   const { account, player, catalog, engine } = runtime;
@@ -8,7 +8,7 @@ export function createMcpServer(runtime) {
     { name: 'netease-music', version },
     {
       instructions:
-        '本机网易云音乐助手，使用登录账号的正常播放权限，不依赖网易云客户端。先搜索或读取喜欢的音乐，再按明确ID点歌；不明确的同名版本需询问。只有verified和真实进度确认才能报告已播放。歌曲数据不经过模型。暂停、继续和停止需要唯一requestId；重试复用同一ID。不要将音频地址、凭据写入回复或文件。无歌单写入/会员解锁功能。',
+        '本机网易云音乐助手，使用账号正常权限播放，不依赖桌面网易云。支持点歌、喜欢列表、每日推荐、心动模式、热歌榜和喜欢/取消喜欢。明确目标后直接调用对应播放入口，同名版本不明确时询问。只有playing和verified都为true才能报告已播放。控制操作需唯一requestId；重试复用原ID。收藏必须传明确liked布尔值，仅按用户意图修改；状态不确定时不反复写。音源地址和凭据不写入回复或文件。无歌单编辑/会员解锁。',
     }
   );
   const songId = z.string().regex(/^[1-9]\d{0,15}$/),
@@ -141,6 +141,58 @@ export function createMcpServer(runtime) {
         a.requestId,
         'playlist:' + a.playlistId
       ),
+    false
+  );
+  tool(
+    'netease_play_daily',
+    '播放账号今天的每日推荐歌曲',
+    { requestId },
+    (a) => player.playCollection(() => account.dailyIds(), a.requestId, 'daily'),
+    false
+  );
+  tool(
+    'netease_play_heart_mode',
+    '开启网易云心动模式；默认基于我喜欢的音乐，队列结束自动获取下一批推荐',
+    {
+      requestId,
+      seedSongId: songId.optional(),
+      playlistId: songId.optional(),
+      count: z.number().int().min(1).max(100).default(30),
+    },
+    (a) =>
+      player.playCollection(
+        () =>
+          account.heartModeIds({
+            seedSongId: a.seedSongId,
+            playlistId: a.playlistId,
+            count: a.count,
+          }),
+        a.requestId,
+        JSON.stringify(['heart', a.seedSongId, a.playlistId, a.count])
+      ),
+    false
+  );
+  tool(
+    'netease_play_hot_chart',
+    '识别并播放网易云热歌榜，不替换为其他榜单',
+    { requestId },
+    (a) => player.playCollection(() => account.hotChartIds(), a.requestId, 'hot-chart'),
+    false
+  );
+  tool(
+    'netease_like',
+    '按明确意图喜欢或取消喜欢歌曲；liked为true/false，省略songId时使用当前歌曲，写入后读回验证',
+    { requestId, songId: songId.optional(), liked: z.boolean() },
+    async (a) => {
+      let id = a.songId;
+      if (!id) {
+        const state = await player.status();
+        if (!state.songId || ['idle', 'starting', 'error'].includes(state.phase))
+          throw new MusicError('NOTHING_TO_PLAY');
+        id = state.songId;
+      }
+      return account.setLiked(id, a.liked, a.requestId);
+    },
     false
   );
   return server;

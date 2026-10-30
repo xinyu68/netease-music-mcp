@@ -63,3 +63,17 @@ test('closing during a request cannot spawn a retry or accept future requests', 
   await assert.rejects(client.call('login_status'), (error) => error.code === 'CANCELLED');
   assert.equal(rig.children.length, 1);
 });
+
+test('a favorite write timeout is never automatically retried', async () => {
+  const rig = workers(99),
+    client = new ApiClient({ timeoutMs: 20, forkImpl: rig.forkImpl });
+  try {
+    await assert.rejects(
+      client.call('like', { id: '1', like: 'false' }),
+      (error) => error.code === 'API_TIMEOUT'
+    );
+    assert.equal(rig.children.length, 1);
+  } finally {
+    client.close();
+  }
+});
