@@ -4,11 +4,16 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp-server.mjs';
 import { MusicError } from '../src/errors.mjs';
-async function rig() {
+async function rig({ likedTracks } = {}) {
   const calls = [];
   const runtime = {
     account: {
       status: async () => ({ loggedIn: true, isVip: true }),
+      likedTracks:
+        likedTracks ??
+        (async () => {
+          throw new MusicError('LOGIN_REQUIRED');
+        }),
       setLiked: async (...args) => {
         calls.push(['like', ...args]);
         return { liked: args[1], verified: true };
@@ -116,6 +121,51 @@ test('MCP never forwards untrusted dependency errors, cookies or URLs to tool re
     assert.ok(!text.includes('must-not-leak'));
     assert.ok(!text.includes('cdn.test'));
     assert.ok(text.includes('INTERNAL_ERROR'));
+  } finally {
+    await r.close();
+  }
+});
+
+test('MCP search exposes scoped favorite candidates and source errors without playing or guessing artist metadata', async () => {
+  const reads = [];
+  const r = await rig({
+    likedTracks: async (options) => {
+      reads.push(options);
+      return [{ id: '2000000001', title: '晴天', artists: [], album: '', durationMs: 269000 }];
+    },
+  });
+  try {
+    for (const args of [
+      { query: '   ' },
+      { query: '晴天', source: 'all' },
+      { query: '晴天', artist: '' },
+      { query: '晴天', refresh: 'true' },
+    ]) {
+      assert.equal(
+        (await r.client.callTool({ name: 'netease_search', arguments: args })).isError,
+        true
+      );
+    }
+    assert.equal(reads.length, 0);
+    const result = await r.client.callTool({
+      name: 'netease_search',
+      arguments: { query: '晴天', artist: '周杰伦', source: 'liked', refresh: true },
+    });
+    assert.notEqual(result.isError, true);
+    const body = JSON.parse(result.content[0].text);
+    assert.equal(body.candidates[0].id, '2000000001');
+    assert.equal(body.candidates[0].artistMatch, 'unknown');
+    assert.deepEqual(body.sources, { liked: { status: 'ok' } });
+    assert.deepEqual(reads, [{ refresh: true }]);
+    const auto = await r.client.callTool({
+      name: 'netease_search',
+      arguments: { query: '晴天' },
+    });
+    assert.notEqual(auto.isError, true);
+    assert.equal(JSON.parse(auto.content[0].text).sources.catalog.code, 'INTERNAL_ERROR');
+    assert.ok(!JSON.stringify(auto).includes('must-not-leak'));
+    assert.ok(!JSON.stringify(auto).includes('cdn.test'));
+    assert.equal(r.calls.length, 0);
   } finally {
     await r.close();
   }

@@ -1,6 +1,6 @@
 {
   "name": "netease-music-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "使用自己的网易云账号，在电脑上通过 Codex 播放音乐。",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",

@@ -2,13 +2,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MusicError, safeError } from './errors.mjs';
 import { version } from './version.mjs';
+import { MusicSearch } from './music-search.mjs';
 export function createMcpServer(runtime) {
   const { account, player, catalog, engine } = runtime;
+  const search = new MusicSearch({ account, catalog });
   const server = new McpServer(
     { name: 'netease-music', version },
     {
       instructions:
-        '本机网易云音乐助手，使用账号正常权限播放，不依赖桌面网易云。支持点歌、喜欢列表、每日推荐、心动模式、热歌榜和喜欢/取消喜欢。播放入口可传mode=sequence/shuffle/repeat_one；只切换模式用netease_play_mode，保留当前歌曲和进度。明确目标后直接调用对应播放入口，同名版本不明确时询问。只有playing和verified都为true才能报告已播放。控制操作需唯一requestId；重试复用原ID。收藏必须传明确liked布尔值，仅按用户意图修改；状态不确定时不反复写。音源地址和凭据不写入回复或文件。无歌单编辑/会员解锁。',
+        '本机网易云音乐助手，使用账号正常权限播放，不依赖桌面网易云。点歌先用netease_search，query传歌名、artist单独传歌手；默认同时查喜欢列表和公开曲库，返回candidates与sources。收藏缺失歌手不代表原唱已匹配；来源失败不等于没有歌，某个ID无权限不代表收藏版本无权限；不猜ID、不用翻唱替代原唱。用户指定收藏歌曲时用source=liked，不手动分页翻收藏。支持喜欢列表、每日推荐、心动模式、热歌榜和喜欢/取消喜欢。播放入口可传mode=sequence/shuffle/repeat_one；只切换模式用netease_play_mode，保留当前歌曲和进度。明确目标后直接调用对应播放入口，同名版本不明确时询问。只有playing和verified都为true才能报告已播放。控制操作需唯一requestId；重试复用原ID。收藏必须传明确liked布尔值，仅按用户意图修改；状态不确定时不反复写。音源地址和凭据不写入回复或文件。无歌单编辑/会员解锁。',
     }
   );
   const songId = z.string().regex(/^[1-9]\d{0,15}$/),
@@ -43,9 +45,15 @@ export function createMcpServer(runtime) {
   );
   tool(
     'netease_search',
-    '搜索歌曲并返回版本候选，不会自动播放',
-    { query: z.string().min(1).max(100), limit: z.number().int().min(1).max(10).default(5) },
-    (a) => catalog.search(a.query, a.limit)
+    '同时查找喜欢列表和公开曲库，返回 candidates 与各来源状态；query 只传歌名，已知歌手另传 artist，source=liked 只查收藏。缺失歌手不代表已匹配，不会自动播放',
+    {
+      query: z.string().trim().min(1).max(100),
+      artist: z.string().trim().min(1).max(100).optional(),
+      source: z.enum(['auto', 'liked', 'catalog']).default('auto'),
+      refresh: z.boolean().default(false),
+      limit: z.number().int().min(1).max(10).default(5),
+    },
+    (a) => search.search(a.query, a.limit, a)
   );
   tool('netease_song_detail', '读取歌曲信息和歌词，详情可见不代表具有播放权限', { songId }, (a) =>
     catalog.track(a.songId)
