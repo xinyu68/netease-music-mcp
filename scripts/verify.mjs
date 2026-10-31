@@ -70,8 +70,8 @@ try {
   );
   assert.ok(selected, 'No suitable full-track candidate in the first liked page');
   assert.ok(
-    (await call('netease_search', { query: `${selected.title} ${selected.artists[0]}`, limit: 5 }))
-      .length
+    (await call('netease_search', { query: selected.title, artist: selected.artists[0], limit: 5 }))
+      .candidates.length
   );
   assert.equal((await call('netease_song_detail', { songId: selected.id })).id, selected.id);
   report.lyricLineCount = (await call('netease_lyrics', { songId: selected.id })).lyrics.length;

@@ -9,7 +9,10 @@ description: 在本机用网易云账号点歌、随机播放或单曲循环、�
 
 ## 点歌和控制
 
-- 明确歌曲 ID 时直接 `netease_play`；只有歌名/歌手时先 `netease_search`。有明显同名版本歧义时用简短候选让用户选择，不默认拿第一条。
+- 使用工具已返回的明确歌曲 ID 调用 `netease_play`，不凭记忆猜 ID。只有歌名/歌手时先 `netease_search`，`query` 只传歌名，已知歌手另传 `artist`；默认 `source: auto` 同时查喜欢列表和公开曲库。
+- 搜索返回 `{ candidates, sources }`，先看来源是否成功，再看候选的 `titleMatch`、`artistMatch` 和 `sources`。优先考虑歌名、歌手都精确匹配的版本；同名不同版本仍须简短询问，不默认拿第一条。`playable: unknown` 不是已验证的播放权限。
+- 用户说“我喜欢的音乐里有”或明确要收藏里的某首歌时，用 `source: liked` 定位，不手动分页翻完整收藏。收藏中的独立 ID 也可调用 `netease_play`；缺失歌手会标为 `artistMatch: unknown`，不能把它说成已确认的原唱。用户已指定收藏版本且只有一个精确歌名候选时可播放，否则有版本歧义时询问。
+- `sources` 中的错误表示该来源未查完，不等于没有歌曲；可用 `refresh: true` 刷新收藏元数据。公开曲库只找到翻唱时不能替代指定原唱。某个 ID 无播放权限只说明该 ID 的情况，不能推断整首歌或收藏版本都无权限。
 - “播放我喜欢的音乐”直接 `netease_play_liked`，不分页读取整份收藏后再逐首调用。指定歌单则先定位歌单 ID，再 `netease_play_playlist`。
 - 每日推荐直接 `netease_play_daily`，热歌榜直接 `netease_play_hot_chart`，心动模式直接 `netease_play_heart_mode`。心动模式使用网易云智能推荐并由播放程序自动补充下一批，默认以喜欢列表第一首为种子；不将其解释成普通随机播放，也不用每首再调用模型。
 - 用户明确说喜欢或取消喜欢时调用 `netease_like`，分别传 `liked: true` / `liked: false`；“这首歌”可省略 songId，由工具获取当前歌曲。没有明确收藏意图时不改账号。结果 verified=true 后才说收藏状态已确认；changed=false 表示本来就符合目标状态。
@@ -36,6 +39,6 @@ node "<插件根目录>/runtime/scripts/setup.mjs" --plugin
 
 准备后重新打开聊天以加载工具。`LOGIN_REQUIRED` 时可再次执行相同准备命令，复用已有运行目录并打开登录窗口；不要读取或索要 Cookie。用户取消登录就停止，不自动改用其他账号。
 
-运行层对只读接口超时已重建子进程并重试一次。仍收到 `API_TIMEOUT` 时简短说明稍后再试，不循环调用。`PREVIEW_ONLY`、`NO_PLAY_PERMISSION` 或 `PROTECTED_MEDIA` 不重试解锁，不使用替代音源。
+运行层对只读接口超时已重建子进程并重试一次。仍收到 `API_TIMEOUT` 时简短说明稍后再试，不循环调用。`PREVIEW_ONLY`、`NO_PLAY_PERMISSION` 或 `PROTECTED_MEDIA` 不重试解锁，不使用替代音源。若失败的 ID 来自公开曲库且还没查收藏，可以搜索 `source: liked` 查看同名收藏候选，再按上述匹配规则处理；这不是解锁该 ID，也不能擅自播放翻唱。
 
 不要为解决音乐问题修改用户全局 Codex 配置、系统主音量、系统输出路由或其他应用。临时音源地址和账号凭据不进入聊天或生成文件。

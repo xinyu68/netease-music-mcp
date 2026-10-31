@@ -25,6 +25,7 @@ export function safeError(error) {
     API_TIMEOUT: '网易云接口超时，请重试',
     API_ERROR: '网易云接口请求失败',
     INVALID_RESPONSE: '网易云返回的数据不完整',
+    SEARCH_TOO_LARGE: '喜欢列表超过 10000 首，未能完整搜索，请缩小范围',
     SOURCE_UNAVAILABLE: '未取得可用的歌曲音频',
     MPV_NOT_FOUND: '未找到独立播放器，请运行 npm run setup:player',
     PLAYER_TIMEOUT: '播放器响应超时',

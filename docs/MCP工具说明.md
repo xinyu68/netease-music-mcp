@@ -1,4 +1,4 @@
-# MCP 工具说明（0.5.0，25 个工具）
+# MCP 工具说明（0.6.0，25 个工具）
 
 协议为本机 stdio。工具正常返回 JSON 文本；业务失败时 `isError=true`，正文为 `{ "code": "…", "message": "…" }`。MCP 参数校验失败由 SDK 返回协议错误。
 
@@ -7,7 +7,7 @@
 | 工具 | 主要参数 | 返回用途 |
 | --- | --- | --- |
 | `netease_account_status` | 无 | 实际登录状态、账号资料和会员状态；不含凭据 |
-| `netease_search` | `query`，`limit=5`（1–10） | 歌曲候选，不会自动播放 |
+| `netease_search` | `query`，可选 `artist`、`source=auto`、`refresh=false`、`limit=5`（1–10） | 同时查喜欢列表和公开曲库，返回 `{ candidates, sources }`，不会自动播放 |
 | `netease_song_detail` | `songId` | 标题、歌手、专辑、时长与带时间戳歌词 |
 | `netease_lyrics` | `songId` | `lyrics` 时间轴和 `unavailable` |
 | `netease_playlists` | 无 | 当前账号歌单摘要、是否自建和是否还有更多 |
@@ -17,6 +17,20 @@
 | `netease_queue` | 无 | 队列名、总数、当前下标和当前起至多五个歌曲 ID |
 
 分页 `limit` 为 1–100，`offset` 为 0–10000。歌曲/歌单 ID 为正整数形式的字符串。歌曲详情可见不等于有权播放。歌单摘要每次最多 1000 个，`more=true` 表示未穷尽账号全部歌单。
+
+### 查找指定歌曲
+
+`query` 传歌名或关键词（1–100 字符），已知歌手单独传 `artist`（1–100 字符）。`source` 可为 `auto`（默认，同时查两个来源）、`liked`（只查收藏）或 `catalog`（只查公开曲库）。例如：
+
+```json
+{"name":"netease_search","arguments":{"query":"晴天","artist":"周杰伦","source":"auto"}}
+```
+
+**0.6.0 返回格式变化**：原来是歌曲数组，现在为 `{ candidates, sources }`。读取结果的客户端须改用 `result.candidates`。每个候选保留歌曲信息，增加 `sources: ["liked", "catalog"]`（实际来源的子集）、`titleMatch: "exact" / "partial"`、`artistMatch: "matched" / "unknown" / "not_requested"`。同 ID 合并来源，不同 ID 的版本保留。排序先精确歌名、再已知歌手、再收藏来源；已知歌手与指定歌手不符的候选会被排除，歌手缺失的收藏仍保留并明确标为 unknown，不假定为原唱。`playable` 始终是 unknown，播放权限由播放工具验证。
+
+`sources` 按所查来源返回 `{ status: "ok" }` 或 `{ status: "error", code, message }`。一个来源失败时仍返回另一个来源的候选和脱敏错误；所有所查来源都失败才返回工具错误。空候选且有来源失败不能据此断言不存在歌曲或没有播放权限。明确要收藏版本时使用 `source: liked`，不需要调用者分页读取全部收藏。
+
+收藏搜索按当前账号与特殊类型定位自己的喜欢歌单，只读取一次歌曲 ID 快照，每批 100 首、最多 4 个并发详情请求，最多处理 10000 首；超出上限返回 `SEARCH_TOO_LARGE`，不静默截断。完整元数据仅缓存在当前进程内 60 秒，账号或 ID 快照变化即失效；`refresh: true` 强制刷新，失败扫描不缓存。每轮请求前检查 30 秒扫描预算，单轮耗时仍受底层接口超时限制；超时作为来源错误返回，不伪装成已搜索完成。
 
 ## 控制工具
 

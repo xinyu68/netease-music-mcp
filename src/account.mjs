@@ -158,6 +158,68 @@ export class Account {
     if (favorites.length !== 1) throw new Error('Liked playlist could not be identified uniquely');
     return this.tracks(favorites[0].id, limit, offset);
   }
+
+  async likedTracks({ refresh = false } = {}) {
+    if (this.closed) throw new MusicError('CANCELLED');
+    const all = await this.playlists();
+    const favorites = all.playlists.filter((p) => p.owned && p.specialType === 5);
+    if (favorites.length !== 1) throw new MusicError('INVALID_RESPONSE');
+    const playlist = await this.playlistIds(favorites[0].id);
+    if (playlist.ids.length > 10000) throw new MusicError('SEARCH_TOO_LARGE');
+    if (playlist.ids.some((id) => !/^[1-9]\d{0,15}$/.test(id)))
+      throw new MusicError('INVALID_RESPONSE');
+    const key = JSON.stringify([all.account.userId, favorites[0].id, playlist.ids]);
+    const cached = this.likedSearchCache;
+    if (!refresh && cached?.key === key && Date.now() - cached.createdAt < 60000)
+      return cached.promise;
+    const entry = { key, createdAt: Date.now() };
+    entry.promise = this.loadLikedTracks(playlist.ids);
+    this.likedSearchCache = entry;
+    try {
+      return await entry.promise;
+    } catch (error) {
+      if (this.likedSearchCache === entry) this.likedSearchCache = null;
+      throw error;
+    }
+  }
+
+  async loadLikedTracks(ids) {
+    const tracks = [];
+    const deadline = Date.now() + 30000;
+    // One playlist snapshot, batches of 100, at most four detail requests in flight.
+    for (let start = 0; start < ids.length; start += 400) {
+      if (this.closed) throw new MusicError('CANCELLED');
+      if (Date.now() >= deadline) throw new MusicError('API_TIMEOUT');
+      const batches = [];
+      for (let offset = start; offset < Math.min(start + 400, ids.length); offset += 100) {
+        const page = ids.slice(offset, offset + 100);
+        batches.push(
+          this.request('/api/v3/song/detail', {
+            c: JSON.stringify(page.map((id) => ({ id }))),
+          }).then((result) => {
+            if (!Array.isArray(result.songs)) throw new MusicError('INVALID_RESPONSE');
+            const byId = new Map(result.songs.filter(Boolean).map((s) => [String(s.id), s]));
+            return page.map((id) => {
+              const song = byId.get(id);
+              return {
+                id,
+                title: typeof song?.name === 'string' ? song.name : '',
+                artists: (song?.ar ?? song?.artists ?? [])
+                  .map((artist) => artist?.name)
+                  .filter((name) => typeof name === 'string' && name.trim()),
+                album: song?.al?.name ?? song?.album?.name ?? '',
+                durationMs: Number(song?.dt ?? song?.duration ?? 0),
+                playable: 'unknown',
+              };
+            });
+          })
+        );
+      }
+      tracks.push(...(await Promise.all(batches)).flat());
+    }
+    if (this.closed) throw new MusicError('CANCELLED');
+    return tracks;
+  }
   async raw(method, params) {
     if (!['song_url_v1'].includes(method)) throw new Error('Endpoint not allowlisted');
     if (!this.api) {
@@ -191,6 +253,7 @@ export class Account {
   }
   close() {
     this.closed = true;
+    this.likedSearchCache = null;
     this.worker?.close();
   }
 

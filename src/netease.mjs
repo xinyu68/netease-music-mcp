@@ -34,8 +34,8 @@ export class NeteaseCatalog {
   }
 
   async search(query, limit = 5) {
-    if (typeof query !== 'string' || !query.trim() || query.length > 120)
-      throw new Error('Query must contain 1–120 characters');
+    if (typeof query !== 'string' || !query.trim() || query.length > 201)
+      throw new Error('Query must contain 1–201 characters');
     if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error('Limit must be 1–10');
     const data = await this.request('/api/search/get/web', {
       s: query.trim(),
