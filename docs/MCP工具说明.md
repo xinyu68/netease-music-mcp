@@ -1,4 +1,4 @@
-# MCP 工具说明（0.6.0，25 个工具）
+# MCP 工具说明（0.6.1，25 个工具）
 
 协议为本机 stdio。工具正常返回 JSON 文本；业务失败时 `isError=true`，正文为 `{ "code": "…", "message": "…" }`。MCP 参数校验失败由 SDK 返回协议错误。
 
@@ -44,7 +44,7 @@
 | `netease_resume` | 无 | 继续当前歌；音源过期时重取并恢复位置 |
 | `netease_stop` | 无 | 取消未完成播放、卸载音频、位置归零；保留队列 |
 | `netease_seek` | `seconds` | 定位到 0 至曲目时长之前；暂停时定位仍保持暂停 |
-| `netease_volume` | `volume`（0–100 整数） | 仅设置 mpv 实例音量，不改系统主音量 |
+| `netease_volume` | `volume`（0–100 整数） | 设置 mpv 实例音量并保存，重启或升级后恢复；不改系统主音量 |
 | `netease_next` | 无 | 队列下一首，越界返回 `QUEUE_BOUNDARY` |
 | `netease_previous` | 无 | 队列上一首，越界返回 `QUEUE_BOUNDARY` |
 | `netease_play_liked` | 无 | 构建喜欢列表队列并从第一首开始 |
@@ -56,6 +56,8 @@
 | `netease_play_mode` | 必填 `mode`：`sequence` / `shuffle` / `repeat_one` | 切换顺序、随机或单曲循环，保留当前歌曲、进度和暂停状态 |
 
 所有 `netease_play*` 播放入口（指定歌曲、喜欢列表、指定歌单、每日推荐、心动模式和热歌榜）均接受可选 `mode`。例如随机播放喜欢列表可以一次调用完成，无需先开始顺序播放。`netease_play_mode` 本身要求显式 mode；省略 mode 的播放操作沿用本进程当前模式。默认顺序；停止或换列表不重置模式，服务重启后恢复默认。
+
+音量在播放器确认设置后保存至 `stateDir/playback-preferences.json`，包含整数 `volume`，也支持 0% 静音。文件不在版本运行目录中，因此升级仍读取同一份设置。启动时保存值优先于 `config.local.json` 的初始音量；没有偏好文件时才使用配置值或默认 30%。临时文件写入后通过原子替换提交；播放、切歌、暂停、停止和退出不会自行覆盖保存值。`PREFERENCES_READ_FAILED` 表示保存文件损坏或不可读，需修复该文件，服务不会静默重置；`VOLUME_SAVE_FAILED` 表示当前播放器已调整，但未能保存，重启可能恢复旧值。
 
 队列最多 10000 首，空列表或超过上限会报错。不含队列编辑或持久化；播放到无权播放的歌曲会明确报错，不自动找替代版本。暂停准备中的新歌后，继续会重新解析该歌；停止后继续从当前歌开头播放。
 

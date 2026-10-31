@@ -123,7 +123,7 @@ export function createMcpServer(runtime) {
   );
   tool(
     'netease_volume',
-    '设置此播放器音量0到100，不改变系统主音量',
+    '按用户明确目标设置播放器音量0到100，成功后保存供重启或升级恢复；不改变系统主音量，保存失败会明确报错',
     { volume: z.number().int().min(0).max(100), requestId },
     (a) => player.volume(a.volume, a.requestId),
     false

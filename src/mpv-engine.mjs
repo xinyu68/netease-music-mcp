@@ -252,6 +252,7 @@ export class MpvEngine extends EventEmitter {
   async volume(value) {
     await this.start();
     await this.command(['set_property', 'volume', value]);
+    this.config.playback.volume = value;
   }
   async close() {
     this.closing = true;

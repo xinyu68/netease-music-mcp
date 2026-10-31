@@ -6,11 +6,12 @@ import { abortable, Mutations } from './async.mjs';
 const validId = (id) => /^[1-9]\d{0,15}$/.test(String(id));
 const validMode = (mode) => ['sequence', 'shuffle', 'repeat_one'].includes(mode);
 export class PlaybackController {
-  constructor({ engine, resolver, catalog, config, randomIndex = randomInt }) {
+  constructor({ engine, resolver, catalog, config, preferences, randomIndex = randomInt }) {
     this.engine = engine;
     this.resolver = resolver;
     this.catalog = catalog;
     this.config = config;
+    this.preferences = preferences;
     this.randomIndex = randomIndex;
     this.mutations = new Mutations();
     this.epoch = 0;
@@ -354,6 +355,7 @@ export class PlaybackController {
       await this.engine.volume(value);
       this.check(epoch);
       this.state.volume = value;
+      await this.preferences?.writeVolume(value);
       return this.status();
     });
   }

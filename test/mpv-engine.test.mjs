@@ -2,6 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MpvEngine } from '../src/mpv-engine.mjs';
 import { validateConfig } from '../src/config.mjs';
+import { MusicError } from '../src/errors.mjs';
+
+test('an acknowledged volume updates the next mpv startup setting; a rejected change keeps the previous setting', async () => {
+  const engine = new MpvEngine(validateConfig());
+  engine.start = async () => {};
+  engine.command = async (command) => assert.deepEqual(command, ['set_property', 'volume', 100]);
+  await engine.volume(100);
+  assert.equal(engine.config.playback.volume, 100);
+  engine.command = async () => {
+    throw new MusicError('PLAYER_COMMAND_FAILED');
+  };
+  await assert.rejects(engine.volume(60), { code: 'PLAYER_COMMAND_FAILED' });
+  assert.equal(engine.config.playback.volume, 100);
+});
 
 test('cancellation between IPC acknowledgements cannot load a stopped source or unpause after a cancelled seek', async () => {
   for (const stage of ['pause', 'seek']) {

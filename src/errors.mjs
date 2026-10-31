@@ -32,6 +32,9 @@ export function safeError(error) {
     PLAYER_DISCONNECTED: '播放器连接已断开',
     PLAYER_FAILED: '音频播放失败',
     PLAYER_COMMAND_FAILED: '播放器未接受操作',
+    PREFERENCES_READ_FAILED:
+      '无法读取已保存的音量，请检查用户状态目录中的 playback-preferences.json',
+    VOLUME_SAVE_FAILED: '音量已调整，但保存失败；重启后可能恢复旧音量，请检查用户状态目录',
     CANCELLED: '操作已被后续停止或暂停取消',
     REQUEST_CONFLICT: '同一请求标识不能用于不同操作',
     QUEUE_FULL: '待处理操作过多，请稍后再试',

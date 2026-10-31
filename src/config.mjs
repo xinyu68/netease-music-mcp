@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
+import { PlaybackPreferences } from './playback-preferences.mjs';
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 export function defaultStateDir() {
   if (process.env.NETEASE_MUSIC_STATE_DIR) return path.resolve(process.env.NETEASE_MUSIC_STATE_DIR);
@@ -86,5 +87,9 @@ export async function loadConfig(
     if (error.code !== 'ENOENT' || process.env.NETEASE_MCP_CONFIG)
       throw new Error('Cannot read music configuration');
   }
-  return validateConfig(input);
+  const config = validateConfig(input);
+  config.playback.volume = await new PlaybackPreferences(config.stateDir).readVolume(
+    config.playback.volume
+  );
+  return config;
 }

@@ -5,6 +5,7 @@ import { NeteaseCatalog } from './netease.mjs';
 import { MediaResolver } from './media-source.mjs';
 import { MpvEngine } from './mpv-engine.mjs';
 import { PlaybackController } from './playback-controller.mjs';
+import { PlaybackPreferences } from './playback-preferences.mjs';
 export function createRuntime(config) {
   const auth = new AuthStore(config),
     worker = new ApiClient(config.api),
@@ -12,7 +13,8 @@ export function createRuntime(config) {
     catalog = new NeteaseCatalog();
   const engine = new MpvEngine(config),
     resolver = new MediaResolver(account),
-    player = new PlaybackController({ engine, resolver, catalog, config });
+    preferences = new PlaybackPreferences(config.stateDir),
+    player = new PlaybackController({ engine, resolver, catalog, config, preferences });
   return {
     config,
     auth,

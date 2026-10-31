@@ -156,6 +156,47 @@ test('seek while paused preserves pause; invalid seeks and volume are rejected',
   await assert.rejects(c.volume(101, 'volume'), (e) => e.code === 'INVALID_ARGUMENT');
   assert.equal((await c.volume(15, 'v')).volume, 15);
 });
+test('explicit volume changes persist once after player acknowledgement; failed player commands never change the saved preference', async () => {
+  const saved = [];
+  const { c, engine } = rig({ preferences: { writeVolume: async (value) => saved.push(value) } });
+  await Promise.all([c.volume(100, 'same-volume'), c.volume(100, 'same-volume')]);
+  assert.deepEqual(saved, [100]);
+  engine.volume = async () => {
+    throw new MusicError('PLAYER_COMMAND_FAILED');
+  };
+  await assert.rejects(c.volume(60, 'failed-volume'), { code: 'PLAYER_COMMAND_FAILED' });
+  assert.deepEqual(saved, [100]);
+  assert.equal((await c.status()).volume, 100);
+  await c.close();
+  assert.deepEqual(saved, [100]);
+});
+test('a preference write failure is not reported as success, while the actual player volume remains visible', async () => {
+  const { c } = rig({
+    preferences: {
+      writeVolume: async () => {
+        throw new MusicError('VOLUME_SAVE_FAILED');
+      },
+    },
+  });
+  await assert.rejects(c.volume(100, 'unsaved-volume'), { code: 'VOLUME_SAVE_FAILED' });
+  assert.equal((await c.status()).volume, 100);
+});
+test('stopping an unacknowledged volume change prevents saving its value', async () => {
+  const saved = [];
+  const { c, engine } = rig({ preferences: { writeVolume: async (value) => saved.push(value) } });
+  let release;
+  engine.volume = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
+  const pending = c.volume(60, 'cancelled-volume');
+  const rejected = assert.rejects(pending, { code: 'CANCELLED' });
+  await until(() => Boolean(release));
+  await c.stop('cancel-volume');
+  release();
+  await rejected;
+  assert.deepEqual(saved, []);
+});
 test('natural end advances the queue; stale end events cannot advance a newer stream', async () => {
   const { c, engine } = rig();
   await c.playCollection(async () => ({ name: 'list', ids: ['1', '2'] }), 'queue', 'queue');
